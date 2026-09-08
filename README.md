@@ -86,10 +86,8 @@ Roughly four minutes. Then:
 
 ```bash
 cd ..
-./scripts/get-kubeconfig.sh
-export KUBECONFIG=$PWD/kubeconfig
-
-kubectl get nodes        # three Ready nodes
+./scripts/get-kubeconfig.sh   # merges a "cgi-k3s" context into ~/.kube/config
+kubectl get nodes             # three Ready nodes, no env var needed
 ```
 
 Wire up the pipeline once, using two values from `terraform output`:

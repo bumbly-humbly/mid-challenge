@@ -29,7 +29,7 @@ output "ssh_private_key_path" {
 }
 
 output "kubeconfig_command" {
-  description = "Fetch a kubeconfig for your local machine."
+  description = "Fetch a kubeconfig and merge it into ~/.kube/config as context cgi-k3s."
   value       = "./scripts/get-kubeconfig.sh"
 }
 
