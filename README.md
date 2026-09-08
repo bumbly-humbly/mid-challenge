@@ -49,7 +49,7 @@ keep serving and Kubernetes reschedules its pods.
 | 2 | Hello-World container in a browser | [k8s/01-configmap.yaml](k8s/01-configmap.yaml), [k8s/02-deployment.yaml](k8s/02-deployment.yaml) |
 | 3 | Multi-node, round-robin, CPU autoscaling | `topologySpreadConstraints` + [k8s/04-hpa.yaml](k8s/04-hpa.yaml) |
 | 4 | Ingress controller terminating TLS | Traefik + [k8s/05-ingress.yaml](k8s/05-ingress.yaml); cert from [terraform/tls.tf](terraform/tls.tf) |
-| 5 | Bonus I - network hardening, automated and persistent | [k8s/06-hardening.yaml](k8s/06-hardening.yaml) |
+| 5 | Bonus I - network hardening, automated and persistent | [k8s/06-hardening.yaml](k8s/06-hardening.yaml) and [k8s/00-traefik-config.yaml](k8s/00-traefik-config.yaml), asserted by [scripts/verify-hardening.sh](scripts/verify-hardening.sh) |
 | 6 | Bonus II - monitoring concept | [Monitoring concept](#monitoring-concept-bonus-ii), below |
 | 7 | Bonus III - CI/CD | [.github/workflows/](.github/workflows/) |
 
@@ -285,31 +285,95 @@ now.
 
 ## Hardening (Bonus I)
 
-Every control below is a Kubernetes object applied by the pipeline, so it
-survives a pod restart, a node loss and a full cluster rebuild. Nothing was
-configured by hand on a box - which is what makes it *persistent* rather than
-merely *present*.
+The task makes three separate claims - an industry standard, automated, and
+persistent - so they are worth arguing separately.
+
+**Standard.** None of the values below are mine. The cipher list is Mozilla's
+Intermediate profile, the headers are the OWASP Secure Headers Project's, and
+the network policies follow CIS Kubernetes 5.3.2. Citing a published baseline
+means a reviewer can check the work against something other than my judgement.
+
+**Automated.** Every control is code. Nothing was configured by hand on a box,
+and `scripts/verify-hardening.sh` re-asserts all of it from the public internet
+on every deploy - if a control goes missing, the pipeline goes red rather than
+the gap waiting to be noticed.
+
+**Persistent.** Three layers, each surviving something different:
+
+| Layer | Delivered by | Survives |
+|---|---|---|
+| TLS certificate | Terraform, into k3s' manifests directory at boot | exists before the first deploy |
+| Controls and chart config | pipeline, as Kubernetes objects in etcd | pod restart, node loss, k3s restart re-applying its own `traefik.yaml` |
+| Assertion | `verify-hardening.sh` as a deploy gate | drift, and me |
+
+**Applied to the entrypoint, not to the route.** This is the part worth a
+minute in the meeting. The controls used to be requested per-route, by
+annotation on the Ingress - which works until someone adds a second Ingress and
+forgets four annotations, and then fails *silently*, because the route still
+serves traffic, just with TLS 1.0 and no headers. They now sit on the Traefik
+entrypoint instead ([k8s/00-traefik-config.yaml](k8s/00-traefik-config.yaml)),
+so every route inherits them, including routes nobody has written yet. Look at
+[k8s/05-ingress.yaml](k8s/05-ingress.yaml): it carries no security
+configuration at all, and is fully hardened.
 
 | Control | Standard | Where |
 |---|---|---|
-| TLS 1.2 minimum, ECDHE and AEAD ciphers only | Mozilla Intermediate | `TLSOption/hardened` |
+| TLS 1.2 minimum, ECDHE and AEAD ciphers only | Mozilla Intermediate | `TLSOption/hardened`, in `kube-system` |
 | HSTS, CSP, frame-deny, nosniff, referrer and permissions policy | OWASP Secure Headers | `Middleware/security-headers` |
 | Server version banner stripped | OWASP Secure Headers | `Middleware/security-headers` |
-| Plaintext HTTP permanently redirected to HTTPS | - | `Middleware/redirect-https` |
+| Plaintext HTTP permanently redirected to HTTPS | - | `web` entrypoint redirection |
 | Per-source-IP rate limiting | - | `Middleware/rate-limit` |
-| Pod-level default-deny ingress | CIS Kubernetes 5.3.2 | `NetworkPolicy/hello-allow-ingress-only` |
+| Bound to the entrypoint, so no route can opt out | - | `HelmChartConfig/traefik` |
+| Ingress controller default-deny, inbound and outbound | CIS Kubernetes 5.3.2 | `NetworkPolicy/traefik-restrict` |
+| App pods reachable only from the ingress controller | CIS Kubernetes 5.3.2 | `NetworkPolicy/hello-allow-ingress-only` |
 | Non-root, no capabilities, no privilege escalation, seccomp | CIS Kubernetes 5.2 | `securityContext` in the Deployment |
+| Anonymous version-check telemetry disabled | - | `globalArguments: []` |
 | Kubernetes API reachable from one IP only | - | `aws_security_group.node` |
 | IMDSv2 required | AWS Foundational Security | `metadata_options` |
 | Encrypted root volumes | AWS Foundational Security | `root_block_device` |
+| All of the above asserted on every deploy | - | `scripts/verify-hardening.sh` |
 
-Verify from outside the cluster:
+Verify from outside the cluster - the same checks CI runs, and the same script:
 
 ```bash
 HOST=$(terraform -chdir=terraform output -raw ingress_host)
+./scripts/verify-hardening.sh "$HOST"
+
+# or by hand, which is what the script automates
 nmap --script ssl-enum-ciphers -p 443 $HOST   # TLS profile
 curl -kI https://$HOST                        # response headers
 curl -sI http://$HOST | head -1               # 301 to HTTPS
+```
+
+The checks deliberately run from the runner rather than on a node: a node
+reaching its own Elastic IP hairpins out through the internet gateway and back,
+and it would test a path no user takes.
+
+**Why the chart override is applied by the pipeline** and not written into the
+server's `user_data` alongside the TLS secret: it would be equally persistent
+either way, since the object lives in etcd regardless of who applied it, but
+`user_data_replace_on_change = true` means every edit replaces the server and,
+through `server_private_ip`, both agents. A full cluster rebuild per tweak is
+not a trade worth making. The cost is a short window on a brand-new cluster
+between k3s starting Traefik and the first deploy hardening it.
+
+**Upgrading a cluster that is already running:** `kubectl apply` does not prune,
+so the objects that moved out of the `default` namespace need removing once.
+
+Note the fully qualified resource names. k3s registers the Traefik CRDs under
+*both* `traefik.io` and the legacy `traefik.containo.us`, and a bare
+`kubectl get middleware` resolves to the legacy group and cheerfully reports
+"No resources found" while the objects sit there in the other one. With
+`--ignore-not-found` a bare `delete` would report success and remove nothing.
+
+```bash
+kubectl -n default delete tlsoptions.traefik.io hardened --ignore-not-found
+kubectl -n default delete middlewares.traefik.io \
+  security-headers rate-limit redirect-https --ignore-not-found
+kubectl -n default delete ingress hello-http --ignore-not-found
+
+# and to see what is actually there, always qualify:
+kubectl -n kube-system get tlsoptions.traefik.io,middlewares.traefik.io
 ```
 
 ---

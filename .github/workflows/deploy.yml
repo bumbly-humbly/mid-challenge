@@ -8,6 +8,7 @@ on:
     paths:
       - "k8s/**"
       - "scripts/deploy.sh"
+      - "scripts/verify-hardening.sh"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -34,6 +35,17 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
 
       - name: Apply manifests over SSM
+        id: deploy
         env:
           SERVER_INSTANCE_ID: ${{ vars.SERVER_INSTANCE_ID }}
         run: ./scripts/deploy.sh
+
+      # Bonus I's "automated" half. The hardening is asserted from the public
+      # internet, against the host that is actually serving, on every deploy --
+      # so a change that quietly drops a control turns the pipeline red instead
+      # of going unnoticed until someone runs the README's commands by hand.
+      - name: Verify hardening from outside the cluster
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nmap
+          ./scripts/verify-hardening.sh "${{ steps.deploy.outputs.ingress_host }}"

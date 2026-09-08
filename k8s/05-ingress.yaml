@@ -1,9 +1,14 @@
 # Task 4: served by an ingress controller that terminates TLS.
 #
-# Two Ingress objects rather than one, because they do different jobs: the
-# HTTPS router carries the certificate and the hardening, the HTTP router
-# exists only to redirect. Splitting them avoids a redirect loop and keeps
-# each object readable.
+# Note what is *not* here. No TLS options, no security-header middleware, no
+# rate limit, and no second Ingress to redirect plaintext -- yet this route is
+# hardened on all four counts. Those controls moved onto the Traefik
+# entrypoint in 00-traefik-config.yaml, so they apply to every route on the
+# cluster rather than to the routes that remembered to ask.
+#
+# That is the difference the brief's word "persistent" is pointing at: the
+# next Ingress someone adds inherits the hardening automatically, and there is
+# no annotation to forget.
 #
 # __INGRESS_HOST__ is substituted at deploy time from the value Terraform
 # wrote to /etc/k3s-demo/env on the server. See scripts/deploy.sh.
@@ -15,34 +20,11 @@ metadata:
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.options: default-hardened@kubernetescrd
-    traefik.ingress.kubernetes.io/router.middlewares: default-security-headers@kubernetescrd,default-rate-limit@kubernetescrd
 spec:
   tls:
     - hosts:
         - __INGRESS_HOST__
       secretName: hello-tls # created at boot from the Terraform-generated cert
-  rules:
-    - host: __INGRESS_HOST__
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: hello
-                port:
-                  number: 80
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: hello-http
-  namespace: default
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
-spec:
   rules:
     - host: __INGRESS_HOST__
       http:

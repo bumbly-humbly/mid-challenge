@@ -15,7 +15,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # The manifests travel inside the command rather than via S3 or a git clone on
-# the node: no extra bucket, no repo credentials on the instance.
+# the node: no extra bucket, no repo credentials on the instance. ~9 KB against
+# an SSM limit of 100 KB.
 PAYLOAD=$(tar czf - -C k8s . | base64 -w0)
 
 REMOTE=$(cat <<'SCRIPT'
@@ -45,11 +46,23 @@ SCRIPT
 )
 REMOTE=${REMOTE/__PAYLOAD__/$PAYLOAD}
 
+# The whole remote script is base64-encoded before it goes into the SSM
+# parameter JSON. Base64 contains no quotes, backslashes or newlines, so there
+# is nothing to escape and no dependency on jq -- which matters because this
+# script is also run by hand from a Windows workstation.
+ENCODED=$(printf '%s' "$REMOTE" | base64 -w0)
+
+# Written next to the repo rather than in /tmp: on Windows the AWS CLI is a
+# native binary and cannot resolve Git Bash virtual paths like /tmp/xxx.
+PARAMS=$(mktemp ./.ssm-params.XXXXXX)
+trap 'rm -f "$PARAMS"' EXIT
+printf '{"commands":["echo %s | base64 -d | bash"]}\n' "$ENCODED" > "$PARAMS"
+
 CMD_ID=$(aws ssm send-command \
   --instance-ids "$SERVER_INSTANCE_ID" \
   --document-name AWS-RunShellScript \
   --comment "deploy ${GITHUB_SHA:-manual}" \
-  --parameters "$(jq -n --arg s "$REMOTE" '{commands: [$s]}')" \
+  --parameters "file://$PARAMS" \
   --query Command.CommandId --output text)
 
 echo "SSM command: $CMD_ID"
@@ -79,6 +92,20 @@ fi
 if [ "$STATUS" != "Success" ]; then
   echo "Deploy failed: $STATUS" >&2
   exit 1
+fi
+
+# Hand the host to the next workflow step, which asserts the hardening against
+# it from the public internet. Only the server knows this value -- Terraform
+# wrote it to /etc/k3s-demo/env at boot -- so it is parsed back out of the
+# remote output rather than duplicated as a GitHub variable that could drift.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  HOST=$(invocation StandardOutputContent | sed -n 's#^Serving on https://##p' | tail -1)
+  if [ -z "$HOST" ]; then
+    echo "Could not determine ingress host from the deploy output" >&2
+    exit 1
+  fi
+  echo "ingress_host=$HOST" >> "$GITHUB_OUTPUT"
+  echo "ingress_host=$HOST"
 fi
 
 echo "Deploy succeeded."

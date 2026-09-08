@@ -47,10 +47,16 @@ jobs:
             sed 's|__INGRESS_HOST__|example.nip.io|g; s|__NODE_CIDR__|10.0.0.0/16|g' "$f" > "rendered/$(basename "$f")"
           done
 
-          # Traefik CRDs are not in the upstream schema set, so they are skipped
-          # by kind rather than ignored wholesale.
+          # The Traefik CRDs used to be skipped here, which meant the hardening
+          # objects were the one thing never checked. They are validated
+          # against the community CRD schema catalogue instead.
+          #
+          # HelmChartConfig (helm.cattle.io) is not in the catalogue and stays
+          # skipped -- k3s' own CRD, no published JSON schema.
           ./kubeconform -strict -summary \
-            -skip TLSOption,Middleware \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -skip HelmChartConfig \
             rendered/
 
       - name: Shell scripts

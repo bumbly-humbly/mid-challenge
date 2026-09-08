@@ -3,17 +3,30 @@
 # so it survives a pod restart, a node loss and a full cluster rebuild --
 # which is what "persistent" has to mean.
 #
+# These objects live in kube-system, next to the ingress controller they
+# configure, because 00-traefik-config.yaml binds them to the entrypoint
+# rather than to any one route.
+#
 # Standards followed:
 #   TLS profile     Mozilla Intermediate (TLS 1.2+, forward secrecy only)
 #   HTTP headers    OWASP Secure Headers Project
 #   Pod ingress     CIS Kubernetes Benchmark 5.3.2 (default-deny per workload)
 
 # --- TLS profile -----------------------------------------------------------
+# Bound to the websecure entrypoint by name, in 00-traefik-config.yaml, so it
+# covers every HTTPS route on the cluster.
+#
+# Traefik will also pick up a TLSOption *named* "default" and apply it
+# implicitly, which is tempting and one line shorter. It is not used here:
+# which namespace that magic name has to live in changed between Traefik v2
+# and v3, and this cluster runs v2.11 (k3s pins the image below the chart
+# version). An explicit reference behaves the same on both, and it can be read
+# off the page -- no convention to know.
 apiVersion: traefik.io/v1alpha1
 kind: TLSOption
 metadata:
   name: hardened
-  namespace: default
+  namespace: kube-system
 spec:
   minVersion: VersionTLS12
   # Mozilla Intermediate: ECDHE only, AEAD only. No CBC, no RSA key exchange,
@@ -35,7 +48,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: security-headers
-  namespace: default
+  namespace: kube-system
 spec:
   headers:
     stsSeconds: 31536000
@@ -59,26 +72,119 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: rate-limit
-  namespace: default
+  namespace: kube-system
 spec:
   rateLimit:
     average: 50 # requests per second per source IP
     burst: 100
 
+# The plaintext redirect used to be a third Middleware here, referenced by a
+# second Ingress. It is now an entrypoint redirection in 00-traefik-config.yaml
+# -- one fewer object, and it covers routes that have not been written yet.
+
 ---
-# --- Plaintext redirect ----------------------------------------------------
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
+# --- The ingress controller's own network position -------------------------
+# The brief says harden *the ingress controller*, so this policy selects
+# Traefik, not the app. Selecting it at all makes it default-deny in both
+# directions; only what is listed below gets through.
+#
+# Ingress: the only legitimate source is k3s' ServiceLB (klipper), which
+# accepts the hostPort on each node and forwards inward. Those pods are not on
+# the host network, so their traffic arrives from a pod IP -- a node-CIDR
+# ipBlock alone would not match it, and the site would go dark. They are
+# selected by label instead. Confirm both on a running cluster with:
+#   kubectl -n kube-system get pods --show-labels | grep -Ei 'traefik|svclb'
+#
+# Port 9100 (metrics) is deliberately not allowed: nothing scrapes it here,
+# and an unauthenticated metrics endpoint is not worth leaving reachable.
+#
+# Egress: a compromised ingress controller should not be able to scan the
+# cluster. It gets DNS, the API server, and the one backend it fronts.
+#
+# THIS IS THE OBJECT MOST LIKELY TO TAKE THE SITE DOWN. Apply it on its own
+# first. Roll back with:
+#   kubectl -n kube-system delete networkpolicy traefik-restrict
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
 metadata:
-  name: redirect-https
-  namespace: default
+  name: traefik-restrict
+  namespace: kube-system
 spec:
-  redirectScheme:
-    scheme: https
-    permanent: true
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # The two data entrypoints take traffic from anywhere, because that is what
+    # an ingress controller is for. Restricting them by source is not available
+    # as a control here: k3s ServiceLB forwards to this pod without rewriting
+    # the source address, so the packet arrives carrying the real client IP.
+    # A "from" list of node and pod CIDRs therefore matches nothing on the
+    # public path and silently drops every request from the internet -- while
+    # curl from the node still returns 200, because that source *is* in-cluster.
+    #
+    # Container ports, not service ports: the k3s chart maps web to 8000 and
+    # websecure to 8443 so Traefik can run unprivileged.
+    - ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8443
+    # The ping/health entrypoint is not public, so it stays restricted to the
+    # cluster. Probes come from the kubelet, which sources from the node.
+    - from:
+        - podSelector: # k3s ServiceLB, in this namespace
+            matchLabels:
+              svccontroller.k3s.cattle.io/svcname: traefik
+        - ipBlock:
+            cidr: __NODE_CIDR__ # kubelet probes
+      ports:
+        - protocol: TCP
+          port: 9000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns # CoreDNS, same namespace
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The API server, reached as the kubernetes Service. Both the pre-DNAT
+    # service address and the post-DNAT node address are listed because CNIs
+    # differ on which one a policy is evaluated against, and being wrong here
+    # means Traefik silently stops seeing Ingress changes.
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.0/16 # k3s service CIDR (fixed; see variables.tf)
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: __NODE_CIDR__
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:
+              app: hello
+      ports:
+        - protocol: TCP
+          port: 8080
 
 ---
 # --- Pod-level ingress restriction -----------------------------------------
+# The other half of the same idea, from the application's side: the app pods
+# accept traffic from the ingress controller and from nothing else.
+#
 # Selecting the app pods at all makes them default-deny; only the listed
 # sources get through. Enforced by the network policy controller k3s ships.
 #

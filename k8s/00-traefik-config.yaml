@@ -1,0 +1,54 @@
+# Bonus I, part 1: hardening that cannot be opted out of.
+#
+# Everything Traefik enforces used to be requested per-route, by annotation on
+# the Ingress. That works right up until someone adds a second Ingress and
+# forgets four annotations -- and the failure is silent, because the route
+# still serves traffic, just with TLS 1.0 and no security headers.
+#
+# This moves the controls onto the *entrypoint* instead. Every router on
+# websecure gets them whether it asks or not, including routes that do not
+# exist yet. See 05-ingress.yaml: it now carries no security configuration at
+# all and is still hardened.
+#
+# HelmChartConfig is how k3s intends its bundled charts to be customised. The
+# helm-controller merges this over the packaged values and re-runs the install
+# job when the content changes; the object lives in etcd, so it survives a pod
+# restart, a node loss, and a k3s restart re-applying its own traefik.yaml.
+#
+# Applied by the pipeline rather than baked into the server's user_data. Both
+# are equally persistent -- the CR is in etcd either way -- but user_data has
+# user_data_replace_on_change = true, so every edit would replace the server
+# and, through server_private_ip, both agents. A cluster rebuild per tweak is
+# not a trade worth making.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  # Helm replaces lists rather than merging them. Check what the packaged
+  # chart already sets before adding keys here:
+  #   kubectl -n kube-system get helmchart traefik -o yaml
+  valuesContent: |-
+    # Chart default is ["--global.checknewversion", "--global.sendanonymoususage"].
+    # An ingress controller on the public internet should not phone home.
+    globalArguments: []
+
+    # Static entrypoint configuration, in preference to the chart's own
+    # ports.web.redirectTo / ports.websecure.middlewares values: these flag
+    # names are the same on Traefik v2 and v3, those value paths are not, and
+    # the version here is not obvious -- k3s ships chart 27.0.2 but pins the
+    # image to Traefik 2.11, so read the image tag, not the chart:
+    #   kubectl -n kube-system get helmchart traefik -o yaml
+    additionalArguments:
+      # Plaintext is answered with a permanent redirect and nothing else.
+      # Replaces the second Ingress object that used to do this per-route.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      # OWASP headers and the rate limit, applied to every HTTPS router.
+      # Provider-qualified because static config has no namespace context.
+      - --entrypoints.websecure.http.middlewares=kube-system-security-headers@kubernetescrd,kube-system-rate-limit@kubernetescrd
+      # The Mozilla Intermediate profile, named explicitly rather than relying
+      # on Traefik's implicit "default" TLSOption lookup. See 06-hardening.yaml.
+      - --entrypoints.websecure.http.tls.options=kube-system-hardened@kubernetescrd

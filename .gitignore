@@ -14,3 +14,6 @@ kubeconfig*
 
 # Personal study notes, not part of the deliverable
 anki-*.csv
+
+# SSM parameter file written by scripts/deploy.sh
+.ssm-params.*
