@@ -1,0 +1,26 @@
+# Task 3: "container instances scale automatically based on CPU load".
+# The metrics source is metrics-server, which k3s installs by default.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hello
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hello
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50 # of the 50m request, so 25m per pod
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0 # react immediately, so the demo is watchable
+    scaleDown:
+      stabilizationWindowSeconds: 60 # and settles back within the meeting

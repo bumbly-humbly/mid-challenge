@@ -1,0 +1,61 @@
+# The whole application. Stock nginx renders this at container start via the
+# official image's envsubst entrypoint, so there is no Dockerfile, no image
+# build and no container registry anywhere in this project.
+#
+# POD_NAME and NODE_NAME come from the downward API, which makes round-robin
+# load balancing (task 3) visible in the browser rather than a claim in a README.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-nginx-template
+  namespace: default
+  labels:
+    app: hello
+data:
+  default.conf.template: |
+    server {
+      listen 8080;
+      server_name _;
+
+      location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+      }
+
+      location / {
+        default_type text/html;
+        return 200 '<!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <meta http-equiv="refresh" content="3">
+      <title>Hello World</title>
+      <style>
+        body { margin:0; min-height:100vh; display:grid; place-items:center;
+               background:#0f1117; color:#e6e8ee;
+               font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+        .card { text-align:center; padding:3rem 4rem; border-radius:14px;
+                background:#171a23; border:1px solid #262b38; }
+        h1 { margin:0 0 1.5rem; font-size:3rem; letter-spacing:-0.02em; }
+        dl { display:grid; grid-template-columns:auto auto; gap:.5rem 1.25rem;
+             margin:0; font-size:.95rem; text-align:left; }
+        dt { color:#8b93a7; }
+        dd { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        p { margin:1.75rem 0 0; font-size:.8rem; color:#6b7280; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Hello World</h1>
+        <dl>
+          <dt>served by pod</dt><dd>${POD_NAME}</dd>
+          <dt>running on node</dt><dd>${NODE_NAME}</dd>
+        </dl>
+        <p>this page refreshes every 3 seconds &mdash; watch the pod name change</p>
+      </div>
+    </body>
+    </html>';
+      }
+    }

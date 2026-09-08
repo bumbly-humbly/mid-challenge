@@ -1,0 +1,56 @@
+# Task 4: served by an ingress controller that terminates TLS.
+#
+# Two Ingress objects rather than one, because they do different jobs: the
+# HTTPS router carries the certificate and the hardening, the HTTP router
+# exists only to redirect. Splitting them avoids a redirect loop and keeps
+# each object readable.
+#
+# __INGRESS_HOST__ is substituted at deploy time from the value Terraform
+# wrote to /etc/k3s-demo/env on the server. See scripts/deploy.sh.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello-https
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.options: default-hardened@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: default-security-headers@kubernetescrd,default-rate-limit@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - __INGRESS_HOST__
+      secretName: hello-tls # created at boot from the Terraform-generated cert
+  rules:
+    - host: __INGRESS_HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello-http
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
+spec:
+  rules:
+    - host: __INGRESS_HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello
+                port:
+                  number: 80
