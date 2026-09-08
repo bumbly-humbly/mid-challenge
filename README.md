@@ -318,7 +318,7 @@ configuration at all, and is fully hardened.
 
 | Control | Standard | Where |
 |---|---|---|
-| TLS 1.2 minimum, ECDHE and AEAD ciphers only | Mozilla Intermediate | `TLSOption/hardened`, in `kube-system` |
+| TLS 1.2 minimum, ECDHE and AEAD ciphers only | Mozilla Intermediate | `TLSOption/default`, in `kube-system` |
 | HSTS, CSP, frame-deny, nosniff, referrer and permissions policy | OWASP Secure Headers | `Middleware/security-headers` |
 | Server version banner stripped | OWASP Secure Headers | `Middleware/security-headers` |
 | Plaintext HTTP permanently redirected to HTTPS | - | `web` entrypoint redirection |
@@ -332,6 +332,27 @@ configuration at all, and is fully hardened.
 | IMDSv2 required | AWS Foundational Security | `metadata_options` |
 | Encrypted root volumes | AWS Foundational Security | `root_block_device` |
 | All of the above asserted on every deploy | - | `scripts/verify-hardening.sh` |
+
+**The TLSOption has to be called `default`, and that is not cosmetic.** It was
+originally named `hardened` and bound to the entrypoint with
+`--entrypoints.websecure.http.tls.options`. Traefik accepts that flag, logs
+nothing, and ignores it: the Kubernetes Ingress provider gives every router
+built from an Ingress with `router.tls: "true"` an explicit *empty* TLS config,
+and an empty config resolves to the TLSOption named `default` - overriding the
+entrypoint value rather than inheriting it.
+
+Nothing about that is visible from outside without a cipher scan. TLS 1.0 and
+1.1 were still refused, because that is Traefik's own default rather than
+anything we configured, so every protocol and header assertion passed while
+`TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA` and its 256-bit sibling were being offered
+the whole time. The manifests read correctly; the cluster was not doing what
+they said. `verify-hardening.sh` is what caught it, which is the entire argument
+for having it.
+
+One more trap in the same area: cipher names are Go's, and Traefik 2.11 rejects
+the `_SHA256`-suffixed ChaCha20 spellings. A rejected `TLSOption` does not fall
+back to defaults - it breaks the handshake outright, so port 443 stops
+answering while port 80 keeps redirecting.
 
 Verify from outside the cluster - the same checks CI runs, and the same script:
 
@@ -371,6 +392,9 @@ kubectl -n default delete tlsoptions.traefik.io hardened --ignore-not-found
 kubectl -n default delete middlewares.traefik.io \
   security-headers rate-limit redirect-https --ignore-not-found
 kubectl -n default delete ingress hello-http --ignore-not-found
+
+# and the TLSOption that was named "hardened" before it had to be "default"
+kubectl -n kube-system delete tlsoptions.traefik.io hardened --ignore-not-found
 
 # and to see what is actually there, always qualify:
 kubectl -n kube-system get tlsoptions.traefik.io,middlewares.traefik.io
