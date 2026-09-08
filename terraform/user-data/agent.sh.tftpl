@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # k3s agent (worker). Joins with the same token the server was given -- no
 # certificate signing request dance, no second Terraform run.
+#
+# No --node-external-ip here either: the API server and metrics-server select a
+# kubelet address by preference order, and advertising a public IP invites the
+# same hairpin-through-the-internet-gateway failure the server comment describes.
 set -euxo pipefail
 
 curl -sfL https://get.k3s.io | \
   INSTALL_K3S_CHANNEL="${k3s_channel}" \
   K3S_URL="https://${server_private_ip}:6443" \
   K3S_TOKEN="${k3s_token}" \
-  sh -s - agent \
-    --node-external-ip "${node_external_ip}"
+  sh -s - agent

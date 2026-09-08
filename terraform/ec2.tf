@@ -113,7 +113,6 @@ resource "aws_instance" "agent" {
     k3s_channel       = var.k3s_channel
     k3s_token         = random_string.k3s_token.result
     server_private_ip = aws_instance.server.private_ip
-    node_external_ip  = aws_eip.agent[count.index].public_ip
   })
 
   tags = {

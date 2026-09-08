@@ -115,25 +115,49 @@ VPC, no buckets, no log groups, no snapshots.
 
 ## Demos worth showing
 
+Set `HOST=$(terraform -chdir=terraform output -raw ingress_host)` first. On
+Windows, run these from Git Bash with `MSYS_NO_PATHCONV=1` set, or the shell
+rewrites `/bin/sh` in `kubectl run` arguments into a Windows path and the pod
+fails to start.
+
 ```bash
-# Round-robin across pods and nodes. The page also shows this by itself -
+# Round-robin across pods and nodes. The page also shows this by itself --
 # it refreshes every 3 seconds and the pod name changes.
-for i in $(seq 6); do curl -sk https://$HOST | grep -o 'hello-[a-z0-9-]*'; done
+for i in $(seq 8); do curl -sk https://$HOST | grep -o 'hello-[a-z0-9-]*'; done | sort | uniq -c
 
 # Self-healing. Delete a pod and watch it come back with no downtime.
 kubectl delete pod -l app=hello --wait=false
 kubectl get pods -l app=hello -w
 
-# CPU autoscaling. Generate load, watch replicas climb from 2 toward 6.
-kubectl run load --rm -it --image=busybox --restart=Never -- \
-  /bin/sh -c 'while true; do wget -q -O- http://hello >/dev/null; done'
-kubectl get hpa hello -w
-
 # Pods really are on different machines.
 kubectl get pods -l app=hello -o wide
 ```
 
----
+### The autoscaling demo, carefully
+
+Load has to originate from `kube-system`. The NetworkPolicy deliberately blocks
+everything else, so the obvious `kubectl run` in `default` is refused -- which
+is worth showing on purpose, as proof that bonus I actually works:
+
+```bash
+# Blocked, by design
+kubectl run np --rm -i --restart=Never --image=busybox --command -- \
+  sh -c 'wget -q -T 6 -O- http://hello || echo BLOCKED_BY_NETWORKPOLICY'
+
+# Allowed: Traefik's namespace is the one the policy trusts
+kubectl -n kube-system run load --rm -i --restart=Never --image=busybox --command -- \
+  sh -c 'for i in 1 2 3 4; do (while true; do wget -q -O- http://hello.default >/dev/null 2>&1; done) & done; sleep 90; kill 0'
+```
+
+Watch it climb with `kubectl get hpa hello -w`. Scaling from 2 to 6 replicas
+takes about 40 seconds.
+
+**Keep the load under about two minutes.** The nodes are t3.small in `standard`
+credit mode, so sustained full-CPU load exhausts the CPU credit balance and the
+instances throttle to their 20% baseline. SSH then stops responding, though the
+site itself keeps serving. Credits refill at 24/hour per node; the throttling
+clears within seconds of stopping the load. This is the direct cost of the
+credit-mode choice below, and it is why the load generator above self-terminates.
 
 ## Cost
 
@@ -351,6 +375,21 @@ on the agents are unaffected, and the site stays up - but nothing can be
 deployed, rescheduled or scaled until it comes back. This is the first thing I
 would fix, and it is deliberate: HA etcd needs three servers, and the brief asks
 for simplicity over resilience.
+
+**Sustained load throttles the nodes.** t3.small in `standard` credit mode
+cannot exceed its 20% CPU baseline once the credit balance is spent. Under a
+sustained load test the balance hit ~1.3 and SSH stopped responding, though
+Traefik kept serving the site throughout and everything recovered within
+seconds of the load stopping. `unlimited` credits would fix it and reintroduce
+the surprise-bill risk the brief warns against; a larger instance type would
+fix it and cost more. For a demo cluster, a time-boxed load test is the cheaper
+answer -- but it is a constraint, not a free lunch.
+
+**The API server and SSH are pinned to one IP.** `admin_cidr` is a /32, and a
+domestic connection rotates it. It changed twice during a single afternoon of
+building this, each time silently breaking SSH and `kubectl` until
+`terraform apply` refreshed the rule. SSM is unaffected, which is why the
+deploy path uses it.
 
 **The kubeconfig on the server is world-readable** (`--write-kubeconfig-mode
 0644`). Fine on a single-tenant box reachable from one IP; wrong on anything

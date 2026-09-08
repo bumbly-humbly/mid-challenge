@@ -30,11 +30,18 @@ chmod 600 /var/lib/rancher/k3s/server/manifests/hello-tls.yaml
 # Traefik and metrics-server are bundled with k3s and enabled by default --
 # that is the ingress controller (task 4) and the HPA metrics source (task 3)
 # with nothing extra installed.
+#
+# Deliberately NOT --node-external-ip. On a server node that value also becomes
+# the apiserver's advertise address, so the in-cluster "kubernetes" Service
+# resolves to the public IP. Pods reaching the API then hairpin out through the
+# internet gateway and come back as internet traffic, which the security group
+# refuses -- CoreDNS, metrics-server and the Traefik install job all fail while
+# node-level kubectl keeps working over 127.0.0.1. The flag only adds a cosmetic
+# ExternalIP column; --tls-san below is what local kubectl actually needs.
 curl -sfL https://get.k3s.io | \
   INSTALL_K3S_CHANNEL="${k3s_channel}" \
   K3S_TOKEN="${k3s_token}" \
   sh -s - server \
-    --node-external-ip "${node_external_ip}" \
     --tls-san "${node_external_ip}" \
     --tls-san "${ingress_host}" \
     --write-kubeconfig-mode 0644

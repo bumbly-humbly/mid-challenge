@@ -11,3 +11,6 @@ terraform.tfvars
 
 # Local kubeconfig
 kubeconfig*
+
+# Personal study notes, not part of the deliverable
+anki-*.csv
