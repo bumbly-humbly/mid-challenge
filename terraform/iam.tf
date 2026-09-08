@@ -48,6 +48,10 @@ data "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
+  github_parts = split("/", var.github_repo)
+  github_owner = try(local.github_parts[0], "")
+  github_name  = try(local.github_parts[1], "")
+
   github_oidc_arn = var.github_repo == "" ? "" : (
     var.create_github_oidc_provider
     ? aws_iam_openid_connect_provider.github[0].arn
@@ -75,10 +79,25 @@ data "aws_iam_policy_document" "gha_assume" {
 
     # Scoped to this repository. Any other repo presenting a valid GitHub
     # token is still refused.
+    #
+    # Two accepted subject formats, because GitHub emits either one:
+    #
+    #   repo:owner/name:ref:refs/heads/main             (classic)
+    #   repo:owner@1234/name@5678:ref:refs/heads/main   (immutable identifiers)
+    #
+    # Accounts with immutable identifiers enabled send the second form. A policy
+    # written only for the first fails with a bare "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity" and the actual claim is visible only in
+    # CloudTrail. Owner and repository names stay pinned in both forms; only the
+    # numeric IDs are wildcarded, and a GitHub username cannot contain "@".
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+
+      values = [
+        "repo:${var.github_repo}:*",
+        "repo:${local.github_owner}@*/${local.github_name}@*:*",
+      ]
     }
   }
 }
