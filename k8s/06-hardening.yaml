@@ -13,20 +13,29 @@
 #   Pod ingress     CIS Kubernetes Benchmark 5.3.2 (default-deny per workload)
 
 # --- TLS profile -----------------------------------------------------------
-# Bound to the websecure entrypoint by name, in 00-traefik-config.yaml, so it
-# covers every HTTPS route on the cluster.
+# The name "default" is load-bearing, and this has to be said plainly because
+# the obvious alternative silently does nothing.
 #
-# Traefik will also pick up a TLSOption *named* "default" and apply it
-# implicitly, which is tempting and one line shorter. It is not used here:
-# which namespace that magic name has to live in changed between Traefik v2
-# and v3, and this cluster runs v2.11 (k3s pins the image below the chart
-# version). An explicit reference behaves the same on both, and it can be read
-# off the page -- no convention to know.
+# Naming it "hardened" and binding it to the entrypoint with
+# --entrypoints.websecure.http.tls.options was tried first. Traefik accepts the
+# flag, logs no error, and ignores it: the Kubernetes Ingress provider gives
+# every router built from an Ingress with router.tls="true" an explicit empty
+# TLS config, and an explicit empty config resolves to the TLSOption named
+# "default" -- overriding the entrypoint value rather than inheriting it.
+#
+# The failure is invisible from the outside without a cipher scan. TLS 1.0 and
+# 1.1 are still refused, because that is Traefik's own default; only the cipher
+# list gives it away, and CBC suites were being offered the whole time. This is
+# exactly what scripts/verify-hardening.sh exists to catch.
+#
+# Cipher names are Go's, and the spelling matters: Traefik 2.11 rejects the
+# _SHA256-suffixed ChaCha20 names, and a rejected TLSOption breaks the
+# handshake outright rather than falling back.
 apiVersion: traefik.io/v1alpha1
 kind: TLSOption
 metadata:
-  name: hardened
-  namespace: kube-system
+  name: default
+  namespace: kube-system # Traefik's own namespace: where the lookup happens
 spec:
   minVersion: VersionTLS12
   # Mozilla Intermediate: ECDHE only, AEAD only. No CBC, no RSA key exchange,

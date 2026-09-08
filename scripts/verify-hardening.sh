@@ -122,8 +122,19 @@ for PROTO in TLSv1.0 TLSv1.1; do
   fi
 done
 
+# Match only the cipher lines. Searching the whole report reports a false
+# positive on "compressors: NULL", which is the desired answer -- TLS-level
+# compression is what CRIME attacks, so NULL there means compression is off.
+grep -E '^\|.*[[:space:]]TLS_' "$WORK/tls.txt" > "$WORK/ciphers.txt" || true
+
+if [ ! -s "$WORK/ciphers.txt" ]; then
+  echo "  FAIL  no cipher lines parsed from the scan output" >&2
+  cat "$WORK/tls.txt" >&2
+  exit 1
+fi
+
 for WEAK in CBC 3DES RC4 NULL; do
-  if grep -q "$WEAK" "$WORK/tls.txt"; then
+  if grep -q "$WEAK" "$WORK/ciphers.txt"; then
     bad "weak cipher family offered: $WEAK"
   else
     ok "no $WEAK ciphers"

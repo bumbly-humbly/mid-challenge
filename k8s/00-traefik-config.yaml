@@ -49,6 +49,9 @@ spec:
       # OWASP headers and the rate limit, applied to every HTTPS router.
       # Provider-qualified because static config has no namespace context.
       - --entrypoints.websecure.http.middlewares=kube-system-security-headers@kubernetescrd,kube-system-rate-limit@kubernetescrd
-      # The Mozilla Intermediate profile, named explicitly rather than relying
-      # on Traefik's implicit "default" TLSOption lookup. See 06-hardening.yaml.
-      - --entrypoints.websecure.http.tls.options=kube-system-hardened@kubernetescrd
+      # No --entrypoints.websecure.http.tls.options here. Traefik accepts that
+      # flag and then ignores it for routers built from an Ingress: the
+      # Kubernetes provider hands each one an explicit empty TLS config, which
+      # resolves to the TLSOption named "default" and overrides the entrypoint
+      # value. Nothing is logged. The TLS profile is applied instead by naming
+      # the TLSOption "default" in this namespace -- see 06-hardening.yaml.
