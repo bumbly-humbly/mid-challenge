@@ -1,0 +1,4 @@
+# Everything here is consumed by Linux: EC2 user_data, shell scripts run on the
+# nodes, and manifests applied over SSM. A CRLF that survives a Windows clone
+# breaks the shebang line and the instance never bootstraps. Force LF.
+* text=auto eol=lf

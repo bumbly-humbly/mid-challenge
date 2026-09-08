@@ -1,0 +1,13 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
+
+# Generated SSH key (Terraform writes this on apply)
+*.pem
+
+# Local kubeconfig
+kubeconfig*
