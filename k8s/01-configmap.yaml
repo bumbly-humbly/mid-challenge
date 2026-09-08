@@ -48,7 +48,7 @@ data:
     </head>
     <body>
       <div class="card">
-        <h1>Hello World</h1>
+        <h1>Hello CGI</h1>
         <dl>
           <dt>served by pod</dt><dd>${POD_NAME}</dd>
           <dt>running on node</dt><dd>${NODE_NAME}</dd>
