@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# k3s server (control plane). This file is a Terraform template: braced
+# placeholders are substituted at plan time, before the instance ever boots.
+set -euxo pipefail
+
+mkdir -p /etc/k3s-demo /var/lib/rancher/k3s/server/manifests
+
+# Values the CI deploy script needs but cannot know: written once, at boot.
+cat > /etc/k3s-demo/env <<ENVFILE
+INGRESS_HOST=${ingress_host}
+NODE_CIDR=${node_cidr}
+ENVFILE
+
+# The self-signed certificate Terraform generated. Anything dropped into the
+# manifests directory is applied by k3s automatically on startup, so the TLS
+# secret exists before the first deploy ever runs.
+cat > /var/lib/rancher/k3s/server/manifests/hello-tls.yaml <<'MANIFEST'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hello-tls
+  namespace: default
+type: kubernetes.io/tls
+data:
+  tls.crt: ${tls_crt_b64}
+  tls.key: ${tls_key_b64}
+MANIFEST
+chmod 600 /var/lib/rancher/k3s/server/manifests/hello-tls.yaml
+
+# Traefik and metrics-server are bundled with k3s and enabled by default --
+# that is the ingress controller (task 4) and the HPA metrics source (task 3)
+# with nothing extra installed.
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_CHANNEL="${k3s_channel}" \
+  K3S_TOKEN="${k3s_token}" \
+  sh -s - server \
+    --node-external-ip "${node_external_ip}" \
+    --tls-san "${node_external_ip}" \
+    --tls-san "${ingress_host}" \
+    --write-kubeconfig-mode 0644
+
+echo 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml' > /etc/profile.d/k3s.sh
+
+# Block until the API answers, so `terraform apply` finishing means something.
+until k3s kubectl get nodes >/dev/null 2>&1; do sleep 5; done
+touch /etc/k3s-demo/ready

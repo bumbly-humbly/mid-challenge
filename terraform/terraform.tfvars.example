@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+# Required. Your public IP as a /32 -- gates SSH and the Kubernetes API.
+#   curl -s https://checkip.amazonaws.com
+admin_cidr = "203.0.113.10/32"
+
+# Required for the CI/CD pipeline. Leave unset to skip creating CI IAM entirely.
+github_repo = "bumbly-humbly/mid-challenge"
+
+# An AWS account can hold only ONE OIDC provider per issuer URL, so creating a
+# second one fails with EntityAlreadyExists. Check before the first apply:
+#
+#   aws iam list-open-id-connect-providers
+#
+# If token.actions.githubusercontent.com is already listed, set this to false
+# and Terraform will reference the existing provider instead of creating one.
+create_github_oidc_provider = false
+
+# region        = "eu-central-1"
+# instance_type = "t3.small"
+# agent_count   = 2
