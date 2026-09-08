@@ -1,0 +1,39 @@
+name: Deploy to k3s
+
+# Bonus III. Changing a manifest in main rolls it out to the cluster with no
+# manual step, no stored AWS keys and no kubeconfig in GitHub.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "k8s/**"
+      - "scripts/deploy.sh"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # required to mint the OIDC token
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Federated, short-lived credentials. No AWS access key exists in this
+      # repository or in this account for CI to use.
+      - name: Assume AWS deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+
+      - name: Apply manifests over SSM
+        env:
+          SERVER_INSTANCE_ID: ${{ vars.SERVER_INSTANCE_ID }}
+        run: ./scripts/deploy.sh

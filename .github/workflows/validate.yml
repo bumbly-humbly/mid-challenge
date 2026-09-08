@@ -1,0 +1,57 @@
+name: Validate
+
+# Static checks on every push. The cluster itself is applied deliberately by a
+# human -- see "Decisions" in the README -- so CI validates the Terraform
+# rather than running it.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Format
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Validate
+        run: |
+          terraform -chdir=terraform init -backend=false
+          terraform -chdir=terraform validate
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint manifests against the Kubernetes schema
+        run: |
+          curl -sSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform.tar.gz kubeconform
+
+          # Placeholders are filled in at deploy time; substitute representative
+          # values so the schema check sees valid documents.
+          mkdir -p rendered
+          for f in k8s/*.yaml; do
+            sed 's|__INGRESS_HOST__|example.nip.io|g; s|__NODE_CIDR__|10.0.0.0/16|g' "$f" > "rendered/$(basename "$f")"
+          done
+
+          # Traefik CRDs are not in the upstream schema set, so they are skipped
+          # by kind rather than ignored wholesale.
+          ./kubeconform -strict -summary \
+            -skip TLSOption,Middleware \
+            rendered/
+
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh
