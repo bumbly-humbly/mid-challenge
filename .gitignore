@@ -17,3 +17,6 @@ anki-*.csv
 
 # SSM parameter file written by scripts/deploy.sh
 .ssm-params.*
+
+# Presentation deck and its generator - not part of the code deliverable
+presentation/
