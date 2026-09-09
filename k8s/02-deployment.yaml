@@ -22,6 +22,14 @@ spec:
     metadata:
       labels:
         app: hello
+      annotations:
+        # nginx renders the ConfigMap template once, at container start, so a
+        # ConfigMap-only change reaches the mounted volume but never the served
+        # page -- and `kubectl rollout status` reports success without having
+        # rolled anything out. Bumping this forces a real rollout. Kustomize's
+        # configMapGenerator does the same thing with a content hash; raw
+        # manifests have to say it out loud.
+        demo/config-revision: "2"
     spec:
       securityContext:
         runAsNonRoot: true
